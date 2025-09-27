@@ -1,65 +1,18 @@
-// components/3DScreen.js - Fixed version without expo-three dependency
+// components/3DScreen.js - Fixed version
 import React, { useRef, useEffect, useState } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text, PanResponder, Dimensions } from 'react-native';
 import { GLView } from 'expo-gl';
-import { ExpoWebGLRenderingContext } from 'expo-gl-cpp';
 import * as THREE from 'three';
 import { Ionicons } from '@expo/vector-icons';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
-// Custom renderer for expo-gl without expo-three dependency
-class ExpoTHREERenderer extends THREE.WebGLRenderer {
-  constructor(gl) {
-    const contextAttributes = {
-      alpha: true,
-      antialias: true,
-      depth: true,
-      failIfMajorPerformanceCaveat: false,
-      powerPreference: "default",
-      premultipliedAlpha: true,
-      preserveDrawingBuffer: true,
-      stencil: true,
-    };
-
-    // Create a canvas-like object that THREE.js expects
-    const canvas = {
-      width: gl.drawingBufferWidth,
-      height: gl.drawingBufferHeight,
-      style: {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      clientHeight: gl.drawingBufferHeight,
-      getContext: () => gl,
-    };
-
-    super({ canvas, context: gl, ...contextAttributes });
-
-    // Set up the renderer
-    this.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
-    this.setClearColor(0x000422, 1.0);
-    
-    // Override the setSize method to prevent canvas manipulation
-    this.setSize = (width, height) => {
-      this._width = width;
-      this._height = height;
-    };
-  }
-
-  render(scene, camera) {
-    this.state.buffers.color.setClear(0.0, 0.016, 0.133, 1.0); // Dark blue background
-    super.render(scene, camera);
-    
-    // Important: flush for expo-gl
-    this.getContext().flush();
-    this.getContext().endFrameEXP();
-  }
-}
-
 const ThreeDScreen = () => {
   const [isRotating, setIsRotating] = useState(true);
   const [currentShape, setCurrentShape] = useState('cube');
   const [currentColor, setCurrentColor] = useState('#00ff00');
+  const [isInitialized, setIsInitialized] = useState(false);
+  
   const sceneRef = useRef();
   const rendererRef = useRef();
   const cameraRef = useRef();
@@ -69,13 +22,13 @@ const ThreeDScreen = () => {
 
   // Pan responder for touch interactions
   const panResponder = PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
+    onStartShouldSetPanResponder: () => isInitialized,
+    onMoveShouldSetPanResponder: () => isInitialized,
     onPanResponderGrant: () => {
       setIsRotating(false);
     },
     onPanResponderMove: (evt, gestureState) => {
-      if (meshRef.current) {
+      if (meshRef.current && isInitialized) {
         const deltaX = gestureState.dx * 0.01;
         const deltaY = gestureState.dy * 0.01;
         
@@ -90,6 +43,7 @@ const ThreeDScreen = () => {
 
   const onContextCreate = async (gl) => {
     try {
+      console.log('Initializing GL context...');
       glRef.current = gl;
       
       // Initialize Three.js scene
@@ -97,34 +51,48 @@ const ThreeDScreen = () => {
       sceneRef.current = scene;
 
       // Setup camera
-      const camera = new THREE.PerspectiveCamera(
-        75,
-        gl.drawingBufferWidth / gl.drawingBufferHeight,
-        0.1,
-        1000
-      );
+      const aspect = gl.drawingBufferWidth / gl.drawingBufferHeight;
+      const camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
       cameraRef.current = camera;
       camera.position.set(0, 0, 5);
-      camera.lookAt(0, 0, 0);
 
-      // Setup custom renderer
-      const renderer = new ExpoTHREERenderer(gl);
+      // Create a simple WebGL renderer that works with expo-gl
+      const renderer = new THREE.WebGLRenderer({
+        canvas: {
+          width: gl.drawingBufferWidth,
+          height: gl.drawingBufferHeight,
+          style: {},
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          clientHeight: gl.drawingBufferHeight,
+          getContext: () => gl,
+        },
+        context: gl,
+        alpha: true,
+        antialias: true,
+        depth: true,
+        stencil: true,
+        preserveDrawingBuffer: true
+      });
+
+      renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
+      renderer.setClearColor(0x000422, 1.0);
       rendererRef.current = renderer;
 
       // Enhanced lighting setup
-      const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+      const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
       scene.add(ambientLight);
 
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
       directionalLight.position.set(5, 5, 5);
       scene.add(directionalLight);
 
-      const pointLight1 = new THREE.PointLight(0x00ff00, 0.6, 100);
-      pointLight1.position.set(-10, 0, 10);
+      const pointLight1 = new THREE.PointLight(0x00ff00, 0.8, 100);
+      pointLight1.position.set(-8, 0, 8);
       scene.add(pointLight1);
 
-      const pointLight2 = new THREE.PointLight(0xff0066, 0.6, 100);
-      pointLight2.position.set(10, 0, 10);
+      const pointLight2 = new THREE.PointLight(0xff0066, 0.8, 100);
+      pointLight2.position.set(8, 0, 8);
       scene.add(pointLight2);
 
       // Add particles
@@ -132,6 +100,9 @@ const ThreeDScreen = () => {
 
       // Create initial shape
       createShape(currentShape, currentColor);
+
+      console.log('Scene initialized successfully');
+      setIsInitialized(true);
 
       // Start render loop
       const render = () => {
@@ -141,25 +112,30 @@ const ThreeDScreen = () => {
 
         animationIdRef.current = requestAnimationFrame(render);
         
+        // Auto-rotation
         if (meshRef.current && isRotating) {
-          meshRef.current.rotation.x += 0.005;
-          meshRef.current.rotation.y += 0.01;
-          meshRef.current.rotation.z += 0.003;
+          meshRef.current.rotation.x += 0.008;
+          meshRef.current.rotation.y += 0.012;
+          meshRef.current.rotation.z += 0.005;
         }
 
         // Animate lights
         const time = Date.now() * 0.001;
         const lights = scene.children.filter(child => child.type === 'PointLight');
         if (lights.length >= 2) {
-          lights[0].position.x = Math.cos(time) * 8;
-          lights[0].position.z = Math.sin(time) * 8;
+          lights[0].position.x = Math.cos(time) * 6;
+          lights[0].position.z = Math.sin(time) * 6;
           
-          lights[1].position.x = Math.cos(time + Math.PI) * 8;
-          lights[1].position.z = Math.sin(time + Math.PI) * 8;
+          lights[1].position.x = Math.cos(time + Math.PI) * 6;
+          lights[1].position.z = Math.sin(time + Math.PI) * 6;
         }
 
         try {
-          rendererRef.current.render(scene, camera);
+          renderer.render(scene, camera);
+          
+          // Essential for expo-gl
+          gl.flush();
+          gl.endFrameEXP();
         } catch (error) {
           console.warn('Render error:', error);
         }
@@ -173,101 +149,106 @@ const ThreeDScreen = () => {
   };
 
   const createParticles = (scene) => {
-    const particleGeometry = new THREE.BufferGeometry();
-    const particleCount = 30;
-    const positions = new Float32Array(particleCount * 3);
+    try {
+      const particleGeometry = new THREE.BufferGeometry();
+      const particleCount = 50;
+      const positions = new Float32Array(particleCount * 3);
 
-    for (let i = 0; i < particleCount * 3; i += 3) {
-      positions[i] = (Math.random() - 0.5) * 15;     // x
-      positions[i + 1] = (Math.random() - 0.5) * 15; // y
-      positions[i + 2] = (Math.random() - 0.5) * 15; // z
+      for (let i = 0; i < particleCount * 3; i += 3) {
+        positions[i] = (Math.random() - 0.5) * 20;     // x
+        positions[i + 1] = (Math.random() - 0.5) * 20; // y
+        positions[i + 2] = (Math.random() - 0.5) * 20; // z
+      }
+
+      particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+      const particleMaterial = new THREE.PointsMaterial({
+        color: 0x00aaff,
+        size: 0.15,
+        transparent: true,
+        opacity: 0.7,
+      });
+
+      const particles = new THREE.Points(particleGeometry, particleMaterial);
+      scene.add(particles);
+    } catch (error) {
+      console.warn('Particles creation error:', error);
     }
-
-    particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
-    const particleMaterial = new THREE.PointsMaterial({
-      color: 0x00aaff,
-      size: 0.1,
-      transparent: true,
-      opacity: 0.6,
-    });
-
-    const particles = new THREE.Points(particleGeometry, particleMaterial);
-    scene.add(particles);
   };
 
   const createShape = (shapeType, color) => {
-    if (!sceneRef.current) return;
-
-    // Remove existing mesh
-    if (meshRef.current) {
-      sceneRef.current.remove(meshRef.current);
-      if (meshRef.current.geometry) meshRef.current.geometry.dispose();
-      if (meshRef.current.material) meshRef.current.material.dispose();
+    if (!sceneRef.current) {
+      console.log('Scene not ready for shape creation');
+      return;
     }
 
-    let geometry;
-    let material;
+    try {
+      // Remove existing mesh
+      if (meshRef.current) {
+        sceneRef.current.remove(meshRef.current);
+        if (meshRef.current.geometry) meshRef.current.geometry.dispose();
+        if (meshRef.current.material) meshRef.current.material.dispose();
+      }
 
-    // Create materials with better properties
-    const materialProps = {
-      color: new THREE.Color(color),
-      shininess: 100,
-      transparent: true,
-      opacity: 0.85,
-    };
+      let geometry;
 
-    // Create different geometries
-    switch (shapeType) {
-      case 'cube':
-        geometry = new THREE.BoxGeometry(2, 2, 2);
-        material = new THREE.MeshPhongMaterial(materialProps);
-        break;
+      // Create different geometries
+      switch (shapeType) {
+        case 'cube':
+          geometry = new THREE.BoxGeometry(2.5, 2.5, 2.5);
+          break;
 
-      case 'sphere':
-        geometry = new THREE.SphereGeometry(1.5, 32, 32);
-        material = new THREE.MeshPhongMaterial(materialProps);
-        break;
+        case 'sphere':
+          geometry = new THREE.SphereGeometry(1.8, 32, 32);
+          break;
 
-      case 'pyramid':
-        geometry = new THREE.ConeGeometry(1.5, 3, 8);
-        material = new THREE.MeshPhongMaterial(materialProps);
-        break;
+        case 'pyramid':
+          geometry = new THREE.ConeGeometry(1.8, 3.5, 8);
+          break;
 
-      case 'torus':
-        geometry = new THREE.TorusGeometry(1.2, 0.4, 16, 100);
-        material = new THREE.MeshPhongMaterial(materialProps);
-        break;
+        case 'torus':
+          geometry = new THREE.TorusGeometry(1.4, 0.5, 16, 100);
+          break;
 
-      case 'octahedron':
-        geometry = new THREE.OctahedronGeometry(1.8);
-        material = new THREE.MeshPhongMaterial(materialProps);
-        break;
+        case 'octahedron':
+          geometry = new THREE.OctahedronGeometry(2.0);
+          break;
 
-      case 'dodecahedron':
-        geometry = new THREE.DodecahedronGeometry(1.5);
-        material = new THREE.MeshPhongMaterial(materialProps);
-        break;
+        case 'dodecahedron':
+          geometry = new THREE.DodecahedronGeometry(1.7);
+          break;
 
-      case 'icosahedron':
-        geometry = new THREE.IcosahedronGeometry(1.6);
-        material = new THREE.MeshPhongMaterial(materialProps);
-        break;
+        case 'icosahedron':
+          geometry = new THREE.IcosahedronGeometry(1.8);
+          break;
 
-      case 'tetrahedron':
-        geometry = new THREE.TetrahedronGeometry(2);
-        material = new THREE.MeshPhongMaterial(materialProps);
-        break;
+        case 'tetrahedron':
+          geometry = new THREE.TetrahedronGeometry(2.2);
+          break;
 
-      default:
-        geometry = new THREE.BoxGeometry(2, 2, 2);
-        material = new THREE.MeshPhongMaterial(materialProps);
+        default:
+          geometry = new THREE.BoxGeometry(2.5, 2.5, 2.5);
+      }
+
+      // Create material with better properties for mobile
+      const material = new THREE.MeshPhongMaterial({
+        color: new THREE.Color(color),
+        shininess: 80,
+        transparent: true,
+        opacity: 0.9,
+        side: THREE.DoubleSide,
+      });
+
+      // Create mesh and add to scene
+      const mesh = new THREE.Mesh(geometry, material);
+      meshRef.current = mesh;
+      sceneRef.current.add(mesh);
+
+      console.log(`Created ${shapeType} with color ${color}`);
+
+    } catch (error) {
+      console.error('Shape creation error:', error);
     }
-
-    // Create mesh and add to scene
-    const mesh = new THREE.Mesh(geometry, material);
-    meshRef.current = mesh;
-    sceneRef.current.add(mesh);
   };
 
   const toggleRotation = () => {
@@ -285,11 +266,13 @@ const ThreeDScreen = () => {
   };
 
   const changeShape = (newShape) => {
+    console.log(`Changing shape to: ${newShape}`);
     setCurrentShape(newShape);
     createShape(newShape, currentColor);
   };
 
   const changeColor = (newColor) => {
+    console.log(`Changing color to: ${newColor}`);
     setCurrentColor(newColor);
     createShape(currentShape, newColor);
   };
@@ -302,13 +285,6 @@ const ThreeDScreen = () => {
       }
     };
   }, []);
-
-  useEffect(() => {
-    // Update shape when current shape or color changes
-    if (sceneRef.current) {
-      createShape(currentShape, currentColor);
-    }
-  }, [currentShape, currentColor]);
 
   const shapes = [
     { name: 'cube', icon: 'cube-outline', label: 'Cube' },
@@ -336,8 +312,10 @@ const ThreeDScreen = () => {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>3D Scene</Text>
-        <Text style={styles.subtitle}>Touch and drag to interact • Tap controls below</Text>
+        <Text style={styles.title}>3D Interactive Scene</Text>
+        <Text style={styles.subtitle}>
+          {isInitialized ? 'Touch and drag to interact • Tap controls below' : 'Loading 3D scene...'}
+        </Text>
       </View>
 
       {/* 3D View */}
@@ -346,6 +324,11 @@ const ThreeDScreen = () => {
           style={styles.gl}
           onContextCreate={onContextCreate}
         />
+        {!isInitialized && (
+          <View style={styles.loadingOverlay}>
+            <Text style={styles.loadingText}>Initializing 3D Scene...</Text>
+          </View>
+        )}
       </View>
 
       {/* Controls */}
@@ -362,6 +345,7 @@ const ThreeDScreen = () => {
                   currentShape === shape.name && styles.activeButton
                 ]}
                 onPress={() => changeShape(shape.name)}
+                disabled={!isInitialized}
               >
                 <Ionicons 
                   name={shape.icon} 
@@ -386,6 +370,7 @@ const ThreeDScreen = () => {
                   currentColor === color.value && styles.activeColorButton
                 ]}
                 onPress={() => changeColor(color.value)}
+                disabled={!isInitialized}
               />
             ))}
           </View>
@@ -396,6 +381,7 @@ const ThreeDScreen = () => {
           <TouchableOpacity
             style={[styles.actionButton, isRotating && styles.activeActionButton]}
             onPress={toggleRotation}
+            disabled={!isInitialized}
           >
             <Ionicons 
               name={isRotating ? "pause" : "play"} 
@@ -413,6 +399,7 @@ const ThreeDScreen = () => {
           <TouchableOpacity
             style={styles.actionButton}
             onPress={resetCamera}
+            disabled={!isInitialized}
           >
             <Ionicons name="refresh-outline" size={18} color="#fff" />
             <Text style={styles.actionButtonText}>Reset</Text>
@@ -455,9 +442,25 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 5,
+    position: 'relative',
   },
   gl: {
     flex: 1,
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 4, 34, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    color: '#00ff00',
+    fontSize: 16,
+    fontWeight: '600',
   },
   controls: {
     backgroundColor: 'rgba(0,0,0,0.95)',
