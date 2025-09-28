@@ -1,4 +1,4 @@
-// App.js
+// App.js - Enhanced with product lookup integration
 import React, { useState, useEffect } from "react";
 import { 
   Text, 
@@ -6,7 +6,9 @@ import {
   StyleSheet, 
   StatusBar, 
   TouchableOpacity,
-  Dimensions 
+  Dimensions,
+  Alert,
+  ScrollView // Use React Native's built-in ScrollView
 } from "react-native";
 import { Camera } from "expo-camera";
 import { Ionicons } from '@expo/vector-icons';
@@ -14,22 +16,27 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import CameraScreen from "./components/CameraScreen";
 import ResultScreen from "./components/ResultScreen";
+import ProductScreen from "./components/ProductScreen";
 import ThreeDScreen from "./components/3DScreen";
-// import Skia3DScreen from "./components/Skia3DScreen";
-import SVGGraphicsScreen from "./components/SVGGraphicsScreen";
 import PureGraphicsScreen from "./components/PureGraphicsScreen";
+import ProductService from "./services/ProductService";
+import Toast from "./utils/Toast";
 
 const { width } = Dimensions.get('window');
 
 export default function App() {
   // Navigation state
-  const [currentScreen, setCurrentScreen] = useState('home'); // 'home', 'scanner', 'result', '3d', 'skia3d'
+  const [currentScreen, setCurrentScreen] = useState('home'); // 'home', 'scanner', 'result', 'product', '3d', 'skia3d'
   
   // Scanner states
   const [hasPermission, setHasPermission] = useState(null);
   const [scanned, setScanned] = useState(false);
   const [scanData, setScanData] = useState(null);
   const [facing, setFacing] = useState('back');
+  
+  // Product states
+  const [productData, setProductData] = useState(null);
+  const [loadingProduct, setLoadingProduct] = useState(false);
 
   useEffect(() => {
     const getCameraPermissions = async () => {
@@ -39,16 +46,69 @@ export default function App() {
     getCameraPermissions();
   }, []);
 
+  // Helper function to check if barcode is a product barcode
+  const isProductBarcode = (data, type) => {
+    if (!data) return false;
+    
+    // Clean the barcode
+    const cleaned = data.replace(/[\s\-]/g, '').trim();
+    
+    // Check if it matches product barcode patterns
+    const productPatterns = [
+      /^\d{8}$/,    // EAN-8
+      /^\d{12}$/,   // UPC-A
+      /^\d{13}$/,   // EAN-13
+      /^\d{14}$/,   // GTIN-14
+      /^97[89]\d{10}$/, // ISBN-13
+    ];
+    
+    // Check if the barcode type indicates a product
+    const productBarcodeTypes = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39'];
+    
+    return productPatterns.some(pattern => pattern.test(cleaned)) || 
+           productBarcodeTypes.includes(type?.toLowerCase());
+  };
+
   // Scanner functions
-  const handleBarCodeScanned = ({ type, data }) => {
+  const handleBarCodeScanned = async ({ type, data }) => {
     setScanned(true);
     setScanData({ type, data });
+    Toast.success('Barcode scanned successfully!');
+    
+    // Always go to result screen first
     setCurrentScreen('result');
+  };
+
+  const handleProductLookup = async (barcode) => {
+    setLoadingProduct(true);
+    Toast.loading('Looking up product information...');
+    
+    try {
+      const productInfo = await ProductService.lookupProduct(barcode);
+      setProductData(productInfo);
+      
+      if (productInfo.found && !productInfo.isUnknown) {
+        Toast.success(`Product found: ${productInfo.name}`);
+        setCurrentScreen('product');
+      } else if (productInfo.isUnknown) {
+        Toast.info('Product found with limited information');
+        setCurrentScreen('product');
+      } else {
+        Toast.warning('Product not found in any database');
+      }
+    } catch (error) {
+      console.error('Product lookup failed:', error);
+      Toast.error('Failed to lookup product information');
+    } finally {
+      setLoadingProduct(false);
+    }
   };
 
   const resetScanner = () => {
     setScanned(false);
     setScanData(null);
+    setProductData(null);
+    setLoadingProduct(false);
     setCurrentScreen('scanner');
   };
 
@@ -59,9 +119,12 @@ export default function App() {
   // Navigation functions
   const navigateTo = (screen) => {
     // Reset scanner state when leaving scanner
-    if (currentScreen === 'result' && screen !== 'scanner') {
-      setScanned(false);
-      setScanData(null);
+    if (currentScreen === 'result' || currentScreen === 'product') {
+      if (screen !== 'scanner') {
+        setScanned(false);
+        setScanData(null);
+        setProductData(null);
+      }
     }
     setCurrentScreen(screen);
   };
@@ -70,6 +133,7 @@ export default function App() {
     setCurrentScreen('home');
     setScanned(false);
     setScanData(null);
+    setProductData(null);
   };
 
   // Home Screen Component
@@ -77,8 +141,8 @@ export default function App() {
     <View style={styles.homeContainer}>
       <View style={styles.homeHeader}>
         <Ionicons name="apps" size={50} color="#00ff00" />
-        <Text style={styles.homeTitle}>Multi-Feature App</Text>
-        <Text style={styles.homeSubtitle}>Choose a feature to get started</Text>
+        <Text style={styles.homeTitle}>Multi-Feature Scanner App</Text>
+        <Text style={styles.homeSubtitle}>Scan barcodes, QR codes, and explore 3D graphics</Text>
       </View>
 
       <View style={styles.featuresGrid}>
@@ -90,9 +154,9 @@ export default function App() {
           <View style={styles.cardIcon}>
             <Ionicons name="scan" size={40} color="#fff" />
           </View>
-          <Text style={styles.cardTitle}>Barcode Scanner</Text>
+          <Text style={styles.cardTitle}>Smart Scanner</Text>
           <Text style={styles.cardDescription}>
-            Scan QR codes, barcodes, and more with advanced recognition
+            Scan product barcodes, QR codes, and get detailed information
           </Text>
           <View style={styles.cardFooter}>
             <Ionicons name="arrow-forward" size={16} color="#fff" />
@@ -116,7 +180,7 @@ export default function App() {
           </View>
         </TouchableOpacity>
 
-        {/* Skia 3D Card */}
+        {/* Graphics Card */}
         <TouchableOpacity
           style={[styles.featureCard, styles.skiaCard]}
           onPress={() => navigateTo('skia3d')}
@@ -124,38 +188,71 @@ export default function App() {
           <View style={styles.cardIcon}>
             <Ionicons name="diamond" size={40} color="#fff" />
           </View>
-          <Text style={styles.cardTitle}>Skia Graphics</Text>
+          <Text style={styles.cardTitle}>Pure Graphics</Text>
           <Text style={styles.cardDescription}>
-            Hardware-accelerated 2D/3D graphics with smooth animations
+            Hardware-accelerated graphics with smooth animations
           </Text>
           <View style={styles.cardFooter}>
             <Ionicons name="arrow-forward" size={16} color="#fff" />
           </View>
         </TouchableOpacity>
 
-        {/* Coming Soon Card */}
+        {/* API Status Card */}
         <TouchableOpacity
-          style={[styles.featureCard, styles.comingSoonCard]}
-          onPress={() => {/* Add your next feature */}}
+          style={[styles.featureCard, styles.statusCard]}
+          onPress={() => showAPIStatus()}
         >
           <View style={styles.cardIcon}>
-            <Ionicons name="add-circle-outline" size={40} color="#fff" />
+            <Ionicons name="settings-outline" size={40} color="#fff" />
           </View>
-          <Text style={styles.cardTitle}>More Features</Text>
+          <Text style={styles.cardTitle}>API Status</Text>
           <Text style={styles.cardDescription}>
-            Additional features coming soon...
+            Check product lookup API configuration and status
           </Text>
           <View style={styles.cardFooter}>
-            <Ionicons name="time-outline" size={16} color="#fff" />
+            <Ionicons name="information-circle" size={16} color="#fff" />
           </View>
         </TouchableOpacity>
       </View>
     </View>
   );
 
+  // Show API Status
+  const showAPIStatus = () => {
+    const status = ProductService.getAPIStatus();
+    const activeAPIs = Object.entries(status)
+      .filter(([_, isActive]) => isActive)
+      .map(([name, _]) => name)
+      .join(', ');
+    
+    const inactiveAPIs = Object.entries(status)
+      .filter(([_, isActive]) => !isActive)
+      .map(([name, _]) => name)
+      .join(', ');
+
+    Toast.info(`Active APIs: ${activeAPIs || 'None'}`, 'LONG');
+    
+    Alert.alert(
+      'API Status',
+      `Active APIs: ${activeAPIs || 'None'}\n\nInactive APIs: ${inactiveAPIs || 'None'}\n\nTo enable more APIs, add your API keys to the ProductService.`,
+      [{ text: 'OK' }]
+    );
+  };
+
   // Navigation Bar Component
   const NavigationBar = () => {
     if (currentScreen === 'home') return null;
+
+    const getScreenTitle = () => {
+      switch (currentScreen) {
+        case 'scanner': return 'Scanner';
+        case 'result': return 'Scan Result';
+        case 'product': return loadingProduct ? 'Loading...' : 'Product Info';
+        case '3d': return '3D Scene';
+        case 'skia3d': return 'Pure Graphics';
+        default: return 'App';
+      }
+    };
 
     return (
       <View style={styles.navbar}>
@@ -165,12 +262,10 @@ export default function App() {
         </TouchableOpacity>
 
         <View style={styles.navTitle}>
-          <Text style={styles.navTitleText}>
-            {currentScreen === 'scanner' && 'Scanner'}
-            {currentScreen === 'result' && 'Scan Result'}
-            {currentScreen === '3d' && '3D Scene'}
-            {currentScreen === 'skia3d' && 'Skia Graphics'}
-          </Text>
+          <Text style={styles.navTitleText}>{getScreenTitle()}</Text>
+          {loadingProduct && (
+            <Text style={styles.navSubtitle}>Looking up product...</Text>
+          )}
         </View>
 
         <View style={styles.navSpacer} />
@@ -179,34 +274,32 @@ export default function App() {
   };
 
   // Permission handling for scanner
-  if (currentScreen === 'scanner' || currentScreen === 'result') {
-    if (hasPermission === null) {
-      return (
-        <SafeAreaView style={styles.container}>
-          <NavigationBar />
-          <View style={styles.messageContainer}>
-            <Ionicons name="camera" size={50} color="#ccc" />
-            <Text style={styles.message}>Requesting camera permission...</Text>
-          </View>
-        </SafeAreaView>
-      );
-    }
+  if ((currentScreen === 'scanner' || currentScreen === 'result' || currentScreen === 'product') && hasPermission === null) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <NavigationBar />
+        <View style={styles.messageContainer}>
+          <Ionicons name="camera" size={50} color="#ccc" />
+          <Text style={styles.message}>Requesting camera permission...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
-    if (hasPermission === false) {
-      return (
-        <SafeAreaView style={styles.container}>
-          <NavigationBar />
-          <View style={styles.messageContainer}>
-            <Ionicons name="camera-off" size={50} color="#ff4444" />
-            <Text style={styles.message}>No access to camera</Text>
-            <Text style={styles.subMessage}>Please enable camera permissions in settings</Text>
-            <TouchableOpacity style={styles.backButton} onPress={goHome}>
-              <Text style={styles.backButtonText}>Go Back</Text>
-            </TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      );
-    }
+  if ((currentScreen === 'scanner' || currentScreen === 'result' || currentScreen === 'product') && hasPermission === false) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <NavigationBar />
+        <View style={styles.messageContainer}>
+          <Ionicons name="camera-off" size={50} color="#ff4444" />
+          <Text style={styles.message}>No access to camera</Text>
+          <Text style={styles.subMessage}>Please enable camera permissions in settings to scan barcodes</Text>
+          <TouchableOpacity style={styles.backButton} onPress={goHome}>
+            <Text style={styles.backButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   // Render current screen
@@ -228,15 +321,26 @@ export default function App() {
         return (
           <ResultScreen 
             scanData={scanData} 
-            onReset={resetScanner} 
+            onReset={resetScanner}
+            onProductLookup={handleProductLookup}
+            loadingProduct={loadingProduct}
           />
         );
       
-       case '3d':
-         return <ThreeDScreen />;
+      case 'product':
+        return (
+          <ProductScreen
+            productData={productData}
+            onBack={() => setCurrentScreen('result')}
+            onScanAgain={resetScanner}
+          />
+        );
       
-       case 'skia3d':
-         return <PureGraphicsScreen />;
+      case '3d':
+        return <ThreeDScreen />;
+      
+      case 'skia3d':
+        return <PureGraphicsScreen />;
       
       default:
         return <HomeScreen />;
@@ -245,9 +349,16 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#000" />
-      <NavigationBar />
-      {renderCurrentScreen()}
+      <ScrollView 
+        showsHorizontalScrollIndicator={false} 
+        showsVerticalScrollIndicator={false}
+        scrollEnabled={currentScreen === 'home'}
+        contentContainerStyle={{ flexGrow: 1 }}
+      >
+        <StatusBar barStyle="light-content" backgroundColor="#000" />
+        <NavigationBar />
+        {renderCurrentScreen()}
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -293,6 +404,11 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
   },
+  navSubtitle: {
+    color: '#00ff00',
+    fontSize: 12,
+    marginTop: 2,
+  },
   navSpacer: {
     width: 80, // Same width as navButton to center the title
   },
@@ -308,7 +424,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   homeTitle: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: 'bold',
     color: '#fff',
     marginTop: 15,
@@ -319,6 +435,7 @@ const styles = StyleSheet.create({
     color: '#ccc',
     marginTop: 10,
     textAlign: 'center',
+    lineHeight: 24,
   },
   featuresGrid: {
     flex: 1,
@@ -350,7 +467,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(0,245,255,0.4)',
     backgroundColor: 'rgba(0,245,255,0.1)',
   },
-  comingSoonCard: {
+  statusCard: {
     borderColor: 'rgba(255,149,0,0.4)',
     backgroundColor: 'rgba(255,149,0,0.1)',
   },
